@@ -148,7 +148,8 @@ async function cloudPushNow() {
     });
     if (!res.ok) return setCloudState("err");
     const body = await res.json().catch(() => null);
-    if (typeof body?.updatedAt === "number") {
+    // Javob kelguncha foydalanuvchi chiqib ketgan bo'lishi mumkin
+    if (currentUser && S && typeof body?.updatedAt === "number") {
       S.updatedAt = body.updatedAt;
       localStorage.setItem(dataKey(currentUser.id), JSON.stringify(S));
     }
