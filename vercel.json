@@ -1,0 +1,7 @@
+{
+  "rewrites": [
+    { "source": "/api/bins/:id", "destination": "/api/bins/[id]" },
+    { "source": "/api/bins", "destination": "/api/bins" },
+    { "source": "/api/health", "destination": "/api/health" }
+  ]
+}

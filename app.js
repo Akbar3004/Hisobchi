@@ -54,7 +54,7 @@ let currentUser = null;
 let S = null;
 const dataKey = uid => "hisob_data_u_" + uid;
 
-const DEFAULT_STATE = { debts: [], monthly: [], incomes: [], goals: [], investments: [], collections: [], gatherings: [] };
+const DEFAULT_STATE = { debts: [], monthly: [], incomes: [], goals: [], investments: [], collections: [], gatherings: [], updatedAt: 0 };
 
 /* eski (v1) ma'lumotlarni yangi tuzilmaga o'tkazish */
 function migrateData(d) {
@@ -93,7 +93,101 @@ function loadUserData(uidv) {
   catch { d = structuredClone(DEFAULT_STATE); }
   return migrateData(Object.assign(structuredClone(DEFAULT_STATE), d));
 }
-function save() { if (currentUser) localStorage.setItem(dataKey(currentUser.id), JSON.stringify(S)); }
+/* touch=false — faqat lokalga yozadi (masalan, bulutdan kelgan nusxani saqlashda);
+   touch=true — o'zgarish vaqtini yangilab, bulutga ham jo'natadi */
+function save(touch = true) {
+  if (!currentUser) return;
+  if (touch) S.updatedAt = Date.now();
+  localStorage.setItem(dataKey(currentUser.id), JSON.stringify(S));
+  if (touch) cloudPushSoon();
+}
+
+/* ================= BULUT SINXRONLASH (Upstash Redis, /api orqali) =================
+   Ma'lumot foydalanuvchi parol xeshi (SHA-256, 64 hex belgi) bo'yicha serverdagi
+   `hisobchi:user:<hash>` kalitida saqlanadi. Qurilmalar orasida yangiroq
+   (updatedAt kattaroq) nusxa ustunlik qiladi. Server yo'q bo'lsa (masalan,
+   faylni to'g'ridan-to'g'ri ochganda) dastur avvalgidek faqat lokal ishlaydi. */
+const CLOUD_BASE = "/api/bins";
+let cloudPushTimer = null;
+let cloudState = "off"; // off | sync | ok | err
+
+function cloudId() {
+  const h = currentUser?.pass;
+  return h && /^[a-f0-9]{64}$/.test(h) ? h : null;
+}
+
+function setCloudState(st, title) {
+  cloudState = st;
+  const el = document.getElementById("cloudDot");
+  if (!el) return;
+  el.className = "cloud-dot cloud-" + st;
+  el.title = title || {
+    off: "Bulut sinxronlash o'chiq",
+    sync: "Sinxronlanmoqda...",
+    ok: "Bulut bilan sinxron",
+    err: "Bulutga ulanib bo'lmadi — ma'lumot faqat shu qurilmada"
+  }[st] || "";
+}
+
+function cloudPushSoon() {
+  if (!cloudId()) return;
+  clearTimeout(cloudPushTimer);
+  cloudPushTimer = setTimeout(cloudPushNow, 1500);
+}
+
+async function cloudPushNow() {
+  const id = cloudId();
+  if (!id || !S) return;
+  clearTimeout(cloudPushTimer); cloudPushTimer = null;
+  setCloudState("sync");
+  try {
+    const res = await fetch(`${CLOUD_BASE}/${id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(S)
+    });
+    if (!res.ok) return setCloudState("err");
+    const body = await res.json().catch(() => null);
+    if (typeof body?.updatedAt === "number") {
+      S.updatedAt = body.updatedAt;
+      localStorage.setItem(dataKey(currentUser.id), JSON.stringify(S));
+    }
+    setCloudState("ok");
+  } catch {
+    setCloudState("err");
+  }
+}
+
+/* Kirishda: bulutdagi nusxani olib, yangirog'ini tanlaymiz */
+async function syncFromCloud() {
+  const id = cloudId();
+  if (!id) return;
+  setCloudState("sync");
+  try {
+    const res = await fetch(`${CLOUD_BASE}/${id}`, { cache: "no-store" });
+    if (res.status === 404) {
+      // Birinchi qurilma — hozirgi ma'lumot bilan ro'yxatga olamiz
+      const reg = await fetch(CLOUD_BASE, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, data: S })
+      });
+      return setCloudState(reg.ok ? "ok" : "err");
+    }
+    if (!res.ok) return setCloudState("err");
+    const cloud = await res.json();
+    if ((cloud?.updatedAt || 0) > (S.updatedAt || 0)) {
+      S = migrateData(Object.assign(structuredClone(DEFAULT_STATE), cloud));
+      save(false);
+      renderTab(activeTab);
+    } else if ((S.updatedAt || 0) > (cloud?.updatedAt || 0)) {
+      return cloudPushNow();
+    }
+    setCloudState("ok");
+  } catch {
+    setCloudState("err");
+  }
+}
 
 /* ================= YORDAMCHI FUNKSIYALAR ================= */
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
@@ -330,12 +424,15 @@ async function doLogin() {
 function enterApp(user) {
   currentUser = user;
   S = loadUserData(user.id);
-  save();
+  save(false);
   document.body.classList.remove("locked");
   renderUserBox();
   switchTab("dashboard");
+  syncFromCloud();
 }
 function doLogout() {
+  // Jo'natilmagan o'zgarishlar bo'lsa, chiqishdan oldin bulutga yuboramiz
+  if (cloudPushTimer) cloudPushNow();
   localStorage.removeItem(SESSION_KEY);
   currentUser = null; S = null;
   document.body.classList.add("locked");
@@ -345,7 +442,9 @@ function renderUserBox() {
   document.getElementById("userBox").innerHTML = currentUser ? `
     <div class="avatar" ${avatarStyle(currentUser.first + currentUser.last)}>${initials(currentUser.first + " " + currentUser.last)}</div>
     <div class="u-name">${esc(currentUser.first)} ${esc(currentUser.last)}</div>
+    <span id="cloudDot" class="cloud-dot cloud-off"></span>
     <button class="u-out" onclick="doLogout()" title="Chiqish">${ico("logout")}</button>` : "";
+  if (currentUser) setCloudState(cloudState);
 }
 
 /* ================= NAVIGATSIYA ================= */
