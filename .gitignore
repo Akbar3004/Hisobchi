@@ -8,3 +8,6 @@
 # Vercel
 .vercel/
 .env*
+
+.vercel
+.env*
