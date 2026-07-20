@@ -1,0 +1,10 @@
+# Claude Code sozlamalari
+.claude/
+
+# Arxiv va vaqtinchalik fayllar
+*.zip
+*.log
+
+# Vercel
+.vercel/
+.env*

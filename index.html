@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hisobchi — Shaxsiy moliya boshqaruvi</title>
+<meta name="description" content="Hisobchi — qarzlar, oylik to'lovlar, daromad taqsimoti, maqsadlar, investitsiya va jamoaviy hisob-kitoblar uchun shaxsiy moliya dasturi">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%235b8cff'/%3E%3Ctext x='32' y='44' font-size='34' font-weight='800' text-anchor='middle' fill='white' font-family='sans-serif'%3E%E2%82%B4%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+</head>
+<body class="locked">
+
+<div class="bg-orbs" aria-hidden="true">
+  <div class="orb orb-1"></div>
+  <div class="orb orb-2"></div>
+  <div class="orb orb-3"></div>
+</div>
+
+<!-- ===== KIRISH / RO'YXATDAN O'TISH ===== -->
+<div id="authScreen" class="auth-screen">
+  <div class="auth-card glass-strong" id="authCard"></div>
+</div>
+
+<div class="app">
+
+  <!-- ===== SIDEBAR ===== -->
+  <aside class="sidebar glass">
+    <div class="logo">
+      <div class="logo-icon">₴</div>
+      <div>
+        <div class="logo-title">Hisobchi</div>
+        <div class="logo-sub">Moliya boshqaruvi</div>
+      </div>
+    </div>
+    <nav class="nav">
+      <button class="nav-btn active" data-tab="dashboard"><span class="nav-ico" data-ico="grid"></span> Jamlanma</button>
+      <div class="nav-group">Shaxsiy</div>
+      <button class="nav-btn" data-tab="debts"><span class="nav-ico" data-ico="swap"></span> Qarzlar</button>
+      <button class="nav-btn" data-tab="monthly"><span class="nav-ico" data-ico="calendar"></span> Oylik to'lovlar</button>
+      <button class="nav-btn" data-tab="income"><span class="nav-ico" data-ico="coins"></span> Daromad taqsimoti</button>
+      <button class="nav-btn" data-tab="goals"><span class="nav-ico" data-ico="target"></span> Maqsadlar</button>
+      <button class="nav-btn" data-tab="invest"><span class="nav-ico" data-ico="trend"></span> Investitsiya</button>
+      <div class="nav-group">Jamoaviy</div>
+      <button class="nav-btn" data-tab="collections"><span class="nav-ico" data-ico="users"></span> Pul yig'ish</button>
+      <button class="nav-btn" data-tab="gatherings"><span class="nav-ico" data-ico="utensils"></span> O'tirish hisobi</button>
+      <div class="nav-group">Tahlil</div>
+      <button class="nav-btn" data-tab="stats"><span class="nav-ico" data-ico="chart"></span> Statistika</button>
+    </nav>
+    <div class="sidebar-foot">
+      <div class="user-box" id="userBox"></div>
+    </div>
+  </aside>
+
+  <!-- ===== MAIN ===== -->
+  <main class="main">
+    <section id="tab-dashboard" class="tab active"></section>
+    <section id="tab-debts" class="tab"></section>
+    <section id="tab-monthly" class="tab"></section>
+    <section id="tab-income" class="tab"></section>
+    <section id="tab-goals" class="tab"></section>
+    <section id="tab-invest" class="tab"></section>
+    <section id="tab-collections" class="tab"></section>
+    <section id="tab-gatherings" class="tab"></section>
+    <section id="tab-stats" class="tab"></section>
+  </main>
+</div>
+
+<!-- Mobile nav toggle -->
+<button id="menuToggle" class="menu-toggle glass" aria-label="Menyu">☰</button>
+
+<!-- Modal root -->
+<div id="modalRoot" class="modal-root hidden">
+  <div class="modal-backdrop"></div>
+  <div class="modal glass-strong" id="modalBox"></div>
+</div>
+
+<!-- Chart tooltip -->
+<div id="chartTip" class="chart-tip hidden"></div>
+
+<!-- Print report -->
+<div id="printReport" class="print-report"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
