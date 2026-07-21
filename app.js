@@ -429,7 +429,8 @@ function enterApp(user) {
   document.body.classList.remove("locked");
   renderUserBox();
   switchTab("dashboard");
-  syncFromCloud();
+  // Avval bulut bilan sinxronlaymiz, so'ng ulangan InvestHub investitsiyalarini yangilaymiz
+  syncFromCloud().finally(refreshLinkedInvestments);
 }
 function doLogout() {
   // Jo'natilmagan o'zgarishlar bo'lsa, chiqishdan oldin bulutga yuboramiz
@@ -1185,8 +1186,9 @@ function renderInvest() {
       <div class="page-title">Investitsiya</div>
       <div class="page-sub">Qayerga qancha qo'ydingiz, har oy qancha foyda kelyapti</div>
     </div>
-    <div style="display:flex;gap:10px">
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
       ${pdfBtn("pdfInvest")}
+      <button class="btn btn-ghost" onclick="openLinkInvestHub()">${ico("link")} InvestHub'dan ulash</button>
       <button class="btn btn-primary" onclick="openAddInvest()">${ico("plus")} Yangi investitsiya</button>
     </div>
   </div>
@@ -1204,8 +1206,8 @@ function renderInvest() {
         <div style="display:flex;gap:13px;align-items:center;min-width:0">
           <div class="avatar" ${avatarStyle(inv.name)}>${ico("trend")}</div>
           <div style="min-width:0">
-            <div class="debt-person">${esc(inv.name)}</div>
-            <div class="debt-meta">${fmtDate(inv.date)}${inv.note ? " · " + esc(inv.note) : ""}</div>
+            <div class="debt-person">${esc(inv.name)}${inv.linked ? ` <span class="chip chip-blue" style="font-size:.6rem">${ico("link")} InvestHub</span>` : ""}</div>
+            <div class="debt-meta">${fmtDate(inv.date)}${inv.linked ? " · avtomatik yangilanadi" : inv.note ? " · " + esc(inv.note) : ""}</div>
           </div>
         </div>
         ${goal ? `<span class="chip chip-blue">${ico("link")} ${esc(goal.name)}</span>` : `<span class="chip chip-gray">Maqsadga bog'lanmagan</span>`}
@@ -1220,9 +1222,15 @@ function renderInvest() {
         ${profitsSorted.length > 5 ? `<div class="hint">yana ${profitsSorted.length - 5} ta yozuv...</div>` : ""}
       </div>` : ""}
       <div class="card-actions">
+        ${inv.linked ? `
+        <button class="btn btn-sm btn-green" onclick="refreshOneLinked('${inv.id}')">${ico("swap")} Yangilash</button>
+        <button class="btn btn-sm btn-ghost" onclick="openLinkGoal('${inv.id}')">${ico("link")} Maqsadga bog'lash</button>
+        <button class="btn btn-sm btn-danger-ghost" onclick="unlinkInvest('${inv.id}')">Uzish</button>
+        ` : `
         <button class="btn btn-sm btn-green" onclick="openAddProfit('${inv.id}')">${ico("plus")} Foyda kiritish</button>
         <button class="btn btn-sm btn-ghost" onclick="openLinkGoal('${inv.id}')">${ico("link")} Maqsadga bog'lash</button>
         <button class="btn btn-sm btn-danger-ghost" onclick="delInvest('${inv.id}')">${ico("trash")}</button>
+        `}
       </div>
     </div>`;
   }).join("")}</div>` : `<div class="empty"><div class="empty-ico">${ico("trend")}</div>Investitsiyalar hali yo'q.<br>Daromadingizdan biror joyga pul qo'ygan bo'lsangiz, shu yerga kiriting va har oy foydasini yozib boring.</div>`}`;
@@ -1323,6 +1331,100 @@ function delInvest(id) {
   const inv = S.investments.find(x => x.id === id); if (!inv) return;
   confirmDo(`<b>${esc(inv.name)}</b> investitsiyasi va foyda tarixi o'chirilsinmi?`, () => {
     S.investments = S.investments.filter(x => x.id !== id); renderAll();
+  });
+}
+
+/* ===== InvestHub bilan ulash =====
+   InvestHub'da investorga berilgan "ulanish kodi" orqali o'sha investorning
+   kapitali va oylik foydalarini shu yerga tortadi va avtomatik yangilab boradi. */
+const SHARE_CODE_RE = /^[a-f0-9]{16,64}$/;
+
+async function fetchSharedSnapshot(code) {
+  try {
+    const r = await fetch(`/api/shared/${code}`, { cache: "no-store" });
+    if (!r.ok) return null;
+    return await r.json();
+  } catch { return null; }
+}
+
+/* Snapshot ma'lumotini investitsiya yozuviga ko'chiradi (id/goalId/sana saqlanadi) */
+function applySnapshotToInvestment(inv, snap) {
+  inv.name = snap.investor ? `${snap.fund} — ${snap.investor}` : (snap.fund || "InvestHub");
+  inv.amount = Number(snap.amount) || 0;
+  inv.profits = (Array.isArray(snap.profits) ? snap.profits : [])
+    .map(p => ({ id: uid(), ym: p.ym, amount: Number(p.amount) || 0 }));
+  inv.linkedFund = snap.fund || "";
+  inv.linkedInvestor = snap.investor || "";
+  inv.linkedAt = snap.updatedAt || Date.now();
+}
+
+function linkMsg(html) {
+  const el = document.getElementById("linkMsg");
+  if (el) el.innerHTML = html;
+}
+
+function openLinkInvestHub() {
+  openModal(`
+  <h3>InvestHub'dan ulash</h3>
+  <div class="form-row"><label>Ulanish kodi</label>
+    <input id="f_linkcode" class="inp" placeholder="InvestHub'dagi investordan olingan kod" autocomplete="off">
+    <div class="hint">InvestHub ilovasida o'z investoringizni oching → <b>Hisobchiga ulash</b> → kodni nusxalab, shu yerga joylashtiring. Kapital va oylik foydalar avtomatik tortiladi va yangilanib boradi.</div>
+  </div>
+  <div id="linkMsg"></div>
+  <div class="modal-actions">
+    <button class="btn btn-ghost" onclick="closeModal()">Bekor</button>
+    <button class="btn btn-primary" onclick="doLinkInvestHub()">Ulash</button>
+  </div>`);
+  document.getElementById("f_linkcode").focus();
+}
+
+async function doLinkInvestHub() {
+  const code = (document.getElementById("f_linkcode").value || "").trim().toLowerCase();
+  if (!SHARE_CODE_RE.test(code)) return linkMsg(`<div class="warn-text">Kod formati noto'g'ri — InvestHub'dan olingan to'liq kodni joylashtiring</div>`);
+  if (S.investments.some(i => i.linkCode === code)) return linkMsg(`<div class="warn-text">Bu investor allaqachon ulangan</div>`);
+  linkMsg(`<div class="hint">Yuklanmoqda...</div>`);
+  const snap = await fetchSharedSnapshot(code);
+  if (!snap) return linkMsg(`<div class="warn-text">Kod bo'yicha ma'lumot topilmadi. Kodni va internet aloqasini tekshiring.</div>`);
+  const inv = { id: uid(), date: todayISO(), goalId: null, note: "InvestHub", linkCode: code, linked: true, profits: [] };
+  applySnapshotToInvestment(inv, snap);
+  S.investments.push(inv);
+  closeModal(); renderAll();
+}
+
+/* Bitta ulangan investitsiyani darhol yangilash */
+async function refreshOneLinked(id) {
+  const inv = S.investments.find(x => x.id === id);
+  if (!inv || !inv.linkCode) return;
+  const snap = await fetchSharedSnapshot(inv.linkCode);
+  if (!snap) return alert("Yangilab bo'lmadi — server javob bermadi yoki internet yo'q");
+  applySnapshotToInvestment(inv, snap);
+  renderAll();
+}
+
+/* Ulangan barcha investitsiyalarni yangilash (kirishda chaqiriladi) */
+async function refreshLinkedInvestments() {
+  if (!S) return;
+  const linked = S.investments.filter(i => i.linked && i.linkCode);
+  if (!linked.length) return;
+  let changed = false;
+  for (const inv of linked) {
+    const snap = await fetchSharedSnapshot(inv.linkCode);
+    if (snap && (snap.updatedAt || 0) > (inv.linkedAt || 0)) {
+      applySnapshotToInvestment(inv, snap);
+      changed = true;
+    }
+  }
+  if (changed && currentUser) {
+    save();
+    if (activeTab === "invest") renderTab("invest");
+  }
+}
+
+function unlinkInvest(id) {
+  const inv = S.investments.find(x => x.id === id); if (!inv) return;
+  confirmDo(`<b>${esc(inv.name)}</b> — InvestHub ulanishini uzasizmi? Ma'lumot qoladi, lekin bundan keyin avtomatik yangilanmaydi (oddiy investitsiyaga aylanadi).`, () => {
+    delete inv.linkCode; delete inv.linked; delete inv.linkedAt;
+    renderAll();
   });
 }
 
