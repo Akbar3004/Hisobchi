@@ -294,7 +294,18 @@ function settleGathering(g) {
     if (debtors[i].balance < 0.01) i++;
     if (creditors[j].balance < 0.01) j++;
   }
-  return { total, share, balances, transfers };
+  // roundedShare — "kishi boshiga" ni ko'rsatishda ishlatiladigan yaxlitlangan
+  // (1000gacha) qiymat. Hisob-kitob (balances/transfers) esa aniq `share` bo'yicha
+  // qoladi — chunki bu yerda kim kimga qancha berishi aniq bo'lishi kerak.
+  return { total, share, roundedShare: roundUp1000(share), balances, transfers };
+}
+
+/* "kishi boshiga" ni bir xil ko'rinishda chiqaradi: yaxlitlangan + (aslida) */
+function perPersonLabel(exact, opts = {}) {
+  const rounded = roundUp1000(exact);
+  const diff = Math.abs(rounded - exact) > 0.001;
+  const aslida = diff ? ` <span class="orig-sum"${opts.inline ? ' style="display:inline"' : ""}>aslida ${fmt(exact)}</span>` : "";
+  return `${fmt(rounded)} so'm${aslida}`;
 }
 
 /* ---------- Statistika: barcha shaxsiy harakatlar ---------- */
@@ -609,7 +620,7 @@ function renderDashboard() {
             <span style="font-weight:600">${esc(g.title)}</span>
             <span style="font-weight:700">${money(st.total)}</span>
           </div>
-          <div style="font-size:.76rem;color:var(--text-3);margin-top:3px">${g.people.length} kishi · kishi boshiga ${fmt(st.share)} so'm</div>
+          <div style="font-size:.76rem;color:var(--text-3);margin-top:3px">${g.people.length} kishi · kishi boshiga ${perPersonLabel(st.share, { inline: true })}</div>
         </div>`;
       }).join("") : `<div class="empty" style="padding:22px;margin-top:10px">O'tirishlar hali yo'q</div>`}
     </div>
@@ -1664,7 +1675,7 @@ function renderGatherings() {
           <div class="debt-person" style="font-size:1.15rem">${esc(g.title)}</div>
           <div class="debt-meta">${fmtDate(g.date)} · ${g.people.length} kishi</div>
         </div>
-        <span class="chip chip-blue">Kishi boshiga: ${fmt(Math.round(st.share))} so'm</span>
+        <span class="chip chip-blue">Kishi boshiga: ${perPersonLabel(st.share, { inline: true })}</span>
       </div>
       <div class="collect-summary">
         <div class="debt-num"><div class="l">Jami sarflandi</div><div class="v">${money(st.total)}</div></div>
@@ -1700,7 +1711,7 @@ function pdfGatherings() {
     return `<h2>${esc(g.title)} — ${fmtDate(g.date)}</h2>
     <div class="rep-tiles">
       <div class="rep-tile"><div class="l">Jami sarflandi</div><div class="v">${fmt(st.total)} so'm</div></div>
-      <div class="rep-tile"><div class="l">Kishi boshiga</div><div class="v">${fmt(Math.round(st.share))} so'm</div></div>
+      <div class="rep-tile"><div class="l">Kishi boshiga</div><div class="v">${fmt(st.roundedShare)} so'm${Math.abs(st.roundedShare - st.share) > 0.001 ? ` <span style="font-size:.72em;color:#888">(aslida ${fmt(st.share)})</span>` : ""}</div></div>
     </div>
     <table>
       <tr><th>Ishtirokchi</th><th class="num">Sarfladi</th><th class="num">Ulushi</th><th>Hisob</th></tr>
@@ -1748,7 +1759,11 @@ function gatherLive() {
   const box = document.getElementById("gatherCalc");
   if (rows.length < 2) { box.innerHTML = "Kamida 2 ta ishtirokchi kiriting..."; return; }
   const total = rows.reduce((s, r) => s + r.spent, 0);
-  box.innerHTML = `Jami: <b>${fmt(total)} so'm</b> · ${rows.length} kishi · kishi boshiga: <b>${fmt(Math.round(total / rows.length))} so'm</b>`;
+  const gExact = total / rows.length;
+  const gRounded = roundUp1000(gExact);
+  const gDiff = Math.abs(gRounded - gExact) > 0.001;
+  box.innerHTML = `Jami: <b>${fmt(total)} so'm</b> · ${rows.length} kishi · kishi boshiga: <b>${fmt(gRounded)} so'm</b>`
+    + (gDiff ? ` <span style="color:var(--red);font-size:.8rem">(aslida: ${fmt(gExact)})</span>` : "");
 }
 function saveGathering() {
   const title = document.getElementById("f_gtitle").value.trim();
