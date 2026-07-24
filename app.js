@@ -1449,8 +1449,12 @@ function renderCollections() {
     const paidCount = c.people.filter(p => p.paid).length;
     const pct = Math.min(100, collected / c.total * 100);
     const diff = Math.abs(rounded - exact) > 0.001;
-    const spenderInList = c.spender && c.people.some(p => p.name.toLowerCase() === c.spender.toLowerCase());
-    const toSpender = c.spender ? c.total - (spenderInList ? rounded : 0) : 0;
+    // Sarflaganga qaytaradigan odamlar (o'zi sarflaganlar bundan mustasno)
+    const payersBack = c.people.filter(p => !p.self).length;
+    // Yaxlitlangan (32,000 dan) va aslidagi (yaxlitlashsiz) qaytish summalari —
+    // ikkalasi ham ko'rsatiladi, chalkashmaslik uchun.
+    const backRounded = c.spender ? payersBack * rounded : 0;
+    const backExact = c.spender ? payersBack * exact : 0;
     return `<div class="card" style="margin-bottom:18px">
       <div class="debt-head">
         <div>
@@ -1459,7 +1463,7 @@ function renderCollections() {
             <b style="color:var(--text)">${fmt(rounded)} so'm</b>
             ${diff ? `<span class="orig-sum" style="display:inline;margin-left:4px">(aslida: ${fmt(exact)})</span>` : ""}
           </div>
-          ${c.spender ? `<div style="margin-top:7px"><span class="spender-chip">${ico("wallet")} Sarflagan: ${esc(c.spender)} — unga ${fmt(toSpender)} so'm qaytishi kerak</span></div>` : ""}
+          ${c.spender ? `<div style="margin-top:7px"><span class="spender-chip">${ico("wallet")} Sarflagan: ${esc(c.spender)} — unga <b>${fmt(backRounded)} so'm</b> qaytadi${payersBack ? ` <span style="opacity:.75;font-weight:500">(${payersBack} kishi × ${fmt(rounded)} so'm)</span>` : ""}${diff ? ` <span class="orig-sum" style="display:inline;margin-left:2px">· aslida ${fmt(backExact)} so'm</span>` : ""}</span></div>` : ""}
         </div>
         ${paidCount === c.people.length
           ? `<span class="chip chip-green">${ico("check")} To'liq yig'ildi</span>`
