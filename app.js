@@ -25,7 +25,8 @@ const ICONS = {
   doc: '<path d="M6 2h8l5 5v13a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2Z"/><path d="M14 2v5h5M8 13h8M8 17h5"/>',
   link: '<path d="M10 14a5 5 0 0 0 7 0l2.5-2.5a5 5 0 0 0-7-7L11 6"/><path d="M14 10a5 5 0 0 0-7 0l-2.5 2.5a5 5 0 0 0 7 7L13 18"/>',
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/>',
-  arrowR: '<path d="M5 12h14m0 0-5-5m5 5-5 5"/>'
+  arrowR: '<path d="M5 12h14m0 0-5-5m5 5-5 5"/>',
+  pencil: '<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/>'
 };
 function ico(name, cls = "") {
   return `<svg class="svgi ${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[name] || ""}</svg>`;
@@ -69,6 +70,10 @@ function migrateData(d) {
       delete inc.amount;
     }
     inc.receipts = inc.receipts || [];
+    /* taqsimot rejasi qatorlariga id va "bajarildi" belgisi qo'shildi */
+    inc.allocs = (inc.allocs || []).map(a => ({
+      id: a.id || uid(), name: a.name, amount: a.amount, done: !!a.done
+    }));
   });
   (d.collections || []).forEach(c => {
     c.spender = c.spender || "";
@@ -249,8 +254,8 @@ function formatMoneyInput(el) {
 document.addEventListener("input", e => {
   if (e.target?.classList?.contains("money-inp")) formatMoneyInput(e.target);
 });
-const moneyInput = (id, ph = "0", extra = "") =>
-  `<input id="${id}" class="inp money-inp" type="text" inputmode="decimal" autocomplete="off" placeholder="${ph}" ${extra}>`;
+const moneyInput = (id, ph = "0", extra = "", val = "") =>
+  `<input id="${id}" class="inp money-inp" type="text" inputmode="decimal" autocomplete="off" placeholder="${ph}"${val !== "" ? ` value="${val}"` : ""} ${extra}>`;
 
 /* ---------- Hisob-kitob yordamchilari ---------- */
 const debtPaid = d => d.payments.reduce((s, p) => s + p.amount, 0);
@@ -910,8 +915,8 @@ function renderIncome() {
     const received = incReceived(inc);
     const used = incAllocated(inc);
     const planLeft = inc.expected - used;
-    const realLeft = received - used;
     const toCome = Math.max(0, inc.expected - received);
+    const doneCount = inc.allocs.filter(a => a.done).length;
     return `<div class="card lift">
       <div class="debt-head">
         <div>
@@ -932,14 +937,27 @@ function renderIncome() {
           <button class="dyn-del" style="width:24px;height:24px;font-size:.7rem" onclick="delReceipt('${inc.id}','${r.id}')">✕</button></span>
         </div>`).join("")}
       </div>
+      <div style="margin-top:14px">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:2px">
+          <div style="font-size:.72rem;text-transform:uppercase;letter-spacing:.8px;color:var(--text-3);font-weight:700">Sarflanadigan joylar</div>
+          ${inc.allocs.length ? `<span class="chip ${doneCount === inc.allocs.length ? "chip-green" : "chip-gray"}" style="font-size:.68rem">${doneCount}/${inc.allocs.length} bajarildi</span>` : ""}
+        </div>
+        ${inc.allocs.length ? inc.allocs.map(a => `
+        <div class="person-row">
+          <button class="check ${a.done ? "on" : ""}" onclick="toggleAllocDone('${inc.id}','${a.id}')" title="${a.done ? "Bajarilmagan deb belgilash" : "Bajarildi deb belgilash"}">✓</button>
+          <div class="p-name ${a.done ? "paid-name" : ""}" style="flex:1">${esc(a.name)}</div>
+          <div class="p-due"><div class="rounded-sum">${fmt(a.amount)} <span style="font-size:.7em;color:var(--text-3)">so'm</span></div></div>
+          <button class="dyn-del" style="width:30px;height:30px;font-size:.72rem;background:rgba(91,140,255,.13);color:var(--accent)" onclick="openAllocModal('${inc.id}','${a.id}')" title="O'zgartirish">${ico("pencil")}</button>
+          <button class="dyn-del" style="width:30px;height:30px;font-size:.72rem" onclick="delAlloc('${inc.id}','${a.id}')" title="O'chirish">✕</button>
+        </div>`).join("") : `<div class="hint" style="padding:9px 0">Reja hali tuzilmagan — <b>Reja qo'shish</b> orqali sarflanadigan joylarni kiriting</div>`}
+      </div>
       <table class="tbl" style="margin-top:10px">
-        ${inc.allocs.map(a => `<tr><td>${esc(a.name)}</td><td class="num" style="font-weight:600">${fmt(a.amount)}</td></tr>`).join("")}
-        <tr><td style="color:var(--text-3)">Jami taqsimlandi (reja)</td><td class="num" style="font-weight:700">${fmt(used)}</td></tr>
-        <tr><td style="color:var(--text-3)">Reja qoldig'i (kutilgan − reja)</td><td class="num" style="font-weight:700;color:${planLeft >= 0 ? "var(--green)" : "var(--red)"}">${fmt(planLeft)}</td></tr>
-        <tr><td style="font-weight:700;color:${realLeft >= 0 ? "var(--green)" : "var(--red)"}">Hozirgi real qoldiq (kelgan − reja)</td>
-            <td class="num" style="font-weight:800;color:${realLeft >= 0 ? "var(--green)" : "var(--red)"}">${fmt(realLeft)}</td></tr>
+        <tr><td style="color:var(--text-3)">Reja uchun summa</td><td class="num" style="font-weight:700">${fmt(used)}</td></tr>
+        <tr><td style="font-weight:700">Qolgan summa</td>
+            <td class="num" style="font-weight:800;color:${planLeft >= 0 ? "var(--green)" : "var(--red)"}">${fmt(planLeft)}</td></tr>
       </table>
       <div class="card-actions">
+        <button class="btn btn-sm btn-ghost" onclick="openAllocModal('${inc.id}')">${ico("plus")} Reja qo'shish</button>
         <button class="btn btn-sm btn-green" onclick="openAddReceipt('${inc.id}')">${ico("plus")} Qism keldi</button>
         <button class="btn btn-sm btn-danger-ghost" onclick="delIncome('${inc.id}')">${ico("trash")} O'chirish</button>
       </div>
@@ -953,16 +971,16 @@ function pdfIncome() {
     <div class="rep-tiles">
       <div class="rep-tile"><div class="l">Kutilgan</div><div class="v">${fmt(inc.expected)} so'm</div></div>
       <div class="rep-tile"><div class="l">Keldi</div><div class="v">${fmt(received)} so'm</div></div>
-      <div class="rep-tile"><div class="l">Taqsimlandi</div><div class="v">${fmt(used)} so'm</div></div>
-      <div class="rep-tile"><div class="l">Real qoldiq</div><div class="v">${fmt(received - used)} so'm</div></div>
+      <div class="rep-tile"><div class="l">Reja uchun summa</div><div class="v">${fmt(used)} so'm</div></div>
+      <div class="rep-tile"><div class="l">Qolgan summa</div><div class="v">${fmt(inc.expected - used)} so'm</div></div>
     </div>
     <table>
       <tr><th>Kelgan qismlar</th><th class="num">Summa</th></tr>
       ${inc.receipts.map(r => `<tr><td>${r.date}${r.note ? " — " + esc(r.note) : ""}</td><td class="num">${fmt(r.amount)}</td></tr>`).join("") || `<tr><td colspan="2">Hali kelmagan</td></tr>`}
     </table>
     <table style="margin-top:8px">
-      <tr><th>Taqsimot (reja)</th><th class="num">Summa</th></tr>
-      ${inc.allocs.map(a => `<tr><td>${esc(a.name)}</td><td class="num">${fmt(a.amount)}</td></tr>`).join("") || `<tr><td colspan="2">Reja yo'q</td></tr>`}
+      <tr><th>Sarflanadigan joylar</th><th class="num">Summa</th><th>Holat</th></tr>
+      ${inc.allocs.map(a => `<tr><td>${esc(a.name)}</td><td class="num">${fmt(a.amount)}</td><td>${a.done ? "Bajarildi" : "Turibdi"}</td></tr>`).join("") || `<tr><td colspan="3">Reja yo'q</td></tr>`}
     </table>`;
   }).join("") || "<p>Daromadlar yo'q</p>");
 }
@@ -1017,7 +1035,7 @@ function saveIncome() {
   document.querySelectorAll("#allocRows .dyn-row").forEach(r => {
     const n = r.querySelector(".alloc-name").value.trim();
     const a = parseMoney(r.querySelector(".alloc-amount").value);
-    if (n && a > 0) allocs.push({ name: n, amount: a });
+    if (n && a > 0) allocs.push({ id: uid(), name: n, amount: a, done: false });
   });
   const receipts = [];
   const first = mval("f_ifirst");
@@ -1058,6 +1076,69 @@ function delIncome(id) {
   const inc = S.incomes.find(x => x.id === id); if (!inc) return;
   confirmDo(`<b>${esc(inc.name)}</b> daromad yozuvi o'chirilsinmi?`, () => {
     S.incomes = S.incomes.filter(x => x.id !== id); renderAll();
+  });
+}
+
+/* ---------- Taqsimot rejasi: qo'shish / o'zgartirish / belgilash ---------- */
+
+/* Reja bajarildi ↔ bajarilmadi */
+function toggleAllocDone(incId, allocId) {
+  const inc = S.incomes.find(x => x.id === incId); if (!inc) return;
+  const a = inc.allocs.find(x => x.id === allocId); if (!a) return;
+  a.done = !a.done;
+  renderAll();
+}
+
+/* allocId berilsa — o'zgartirish, berilmasa — yangi qator qo'shish */
+function openAllocModal(incId, allocId) {
+  const inc = S.incomes.find(x => x.id === incId); if (!inc) return;
+  const a = allocId ? inc.allocs.find(x => x.id === allocId) : null;
+  const used = incAllocated(inc);
+  /* Yangi qator uchun bo'sh joy: o'zgartirishda shu qatorning o'zi hisobga olinmaydi */
+  const free = inc.expected - used + (a ? a.amount : 0);
+  openModal(`
+  <h3>${a ? "Rejani o'zgartirish" : "Rejaga qo'shish"}</h3>
+  <p style="color:var(--text-2);font-size:.88rem;margin-bottom:14px">${esc(inc.name)} · taqsimlanmagan summa: <b style="color:${free >= 0 ? "var(--green)" : "var(--red)"}">${fmt(free)} so'm</b></p>
+  <div class="form-2">
+    <div class="form-row"><label>Nomi (qayerga)</label>
+      <input id="f_aname" class="inp" placeholder="Masalan: Oziq-ovqat" value="${a ? esc(a.name) : ""}"></div>
+    <div class="form-row"><label>Summa (so'm)</label>${moneyInput("f_aamount", "500,000", "", a ? fmt(a.amount) : "")}</div>
+  </div>
+  ${a ? `<div class="form-row"><label style="display:flex;align-items:center;gap:10px;cursor:pointer">
+    <input id="f_adone" type="checkbox" ${a.done ? "checked" : ""} style="width:18px;height:18px;accent-color:var(--green)">
+    <span>Bajarildi deb belgilash</span></label></div>` : ""}
+  <div id="allocMsg"></div>
+  <div class="modal-actions">
+    <button class="btn btn-ghost" onclick="closeModal()">Bekor</button>
+    <button class="btn btn-primary" onclick="saveAlloc('${incId}'${allocId ? `,'${allocId}'` : ""})">Saqlash</button>
+  </div>`);
+  document.getElementById("f_aname").focus();
+}
+
+function saveAlloc(incId, allocId) {
+  const inc = S.incomes.find(x => x.id === incId); if (!inc) return;
+  const name = document.getElementById("f_aname").value.trim();
+  const amount = mval("f_aamount");
+  if (!name || !(amount > 0)) {
+    document.getElementById("allocMsg").innerHTML = `<div class="warn-text">Nomi va summani kiriting</div>`;
+    return;
+  }
+  if (allocId) {
+    const a = inc.allocs.find(x => x.id === allocId); if (!a) return;
+    a.name = name; a.amount = amount;
+    const chk = document.getElementById("f_adone");
+    if (chk) a.done = chk.checked;
+  } else {
+    inc.allocs.push({ id: uid(), name, amount, done: false });
+  }
+  closeModal(); renderAll();
+}
+
+function delAlloc(incId, allocId) {
+  const inc = S.incomes.find(x => x.id === incId); if (!inc) return;
+  const a = inc.allocs.find(x => x.id === allocId); if (!a) return;
+  confirmDo(`Rejadan <b>${esc(a.name)}</b> (${fmt(a.amount)} so'm) o'chirilsinmi?`, () => {
+    inc.allocs = inc.allocs.filter(x => x.id !== allocId); renderAll();
   });
 }
 
