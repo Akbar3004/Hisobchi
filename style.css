@@ -255,6 +255,28 @@ select.inp option{background:#151b32;color:var(--text)}
 }
 .check.on{background:var(--green);border-color:var(--green);color:#08331d}
 
+/* ==== Oylik to'lovlarni rejaga tanlash ro'yxati (daromad taqsimoti) ==== */
+.pick-list{
+  border:1px solid var(--border-soft);border-radius:13px;
+  padding:2px 13px;background:var(--surface-2);
+}
+/* .form-row label ustidan yozish uchun ikki sinfli tanlagich kerak */
+.pick-list .pick-row{
+  display:flex;align-items:center;gap:11px;padding:10px 0;cursor:pointer;
+  border-bottom:1px solid var(--border-soft);
+  margin-bottom:0;font-size:.9rem;color:var(--text);font-weight:500;
+}
+.pick-list .pick-row:last-child{border-bottom:none}
+.pick-list .pick-row input[type=checkbox]{width:18px;height:18px;flex-shrink:0;accent-color:var(--green);cursor:pointer}
+.pick-list .pick-row .chip{flex-shrink:0}
+/* uzun nom bir necha qatorga o'raladi, summa esa o'ng tomonda qoladi */
+.pick-list .pick-row .p-name{white-space:normal;overflow:visible;text-overflow:clip;line-height:1.35}
+.pick-list .pick-row .p-due{flex-shrink:0}
+.pick-list .pick-row .p-due .rounded-sum{font-size:.9rem}
+/* Rejadagi qator oylik to'lovga bog'langanini bildiruvchi belgi */
+.src-chip{margin-left:7px;padding:2px 8px;font-size:.66rem;vertical-align:middle;white-space:nowrap}
+.src-chip .svgi{width:11px;height:11px;vertical-align:-1px;margin-right:2px}
+
 /* ============ YIG'ISH (collections) ============ */
 .person-row{display:flex;align-items:center;gap:13px;padding:11px 0;border-bottom:1px solid var(--border-soft)}
 .person-row:last-child{border-bottom:none}
@@ -407,6 +429,8 @@ body:not(.locked) .auth-screen{display:none!important}
   .person-row .p-due{margin-left:auto}
   .person-row .method-chips{order:5}
   .person-row .given-sel{order:6;flex:1;max-width:none}
+  /* oylik to'lovni tanlash qatori: nomi va summasi ikki qatorga bo'linadi */
+  .pick-list .pick-row{gap:9px}
   .month-row{flex-wrap:wrap;gap:9px 12px}
   .month-row>div[style*="flex:1"]{flex:1 1 55%}
   .day-badge{width:46px;height:46px}
