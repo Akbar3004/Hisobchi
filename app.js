@@ -62,6 +62,15 @@ function migrateData(d) {
   d.investments = d.investments || [];
   (d.monthly || []).forEach(m => {
     m.paid = (m.paid || []).map(p => typeof p === "string" ? { ym: p, by: "" } : p);
+    /* eski yozuvlarda "qachon to'langani" saqlanmagan — qaysi oy uchun bo'lsa
+       o'sha oyda to'langan deb hisoblaymiz */
+    m.paid.forEach(p => {
+      p.date = p.date || "";
+      p.payYM = p.payYM || (p.date ? ymOf(p.date) : p.ym);
+    });
+    /* qaysi oydan beri to'lanadi: eski ma'lumotlarda birinchi to'langan oy,
+       bo'lmasa shu oy — shunda o'tmishga soxta qarzdorlik yozilmaydi */
+    if (!m.since) m.since = m.paid.map(p => p.ym).sort()[0] || nowYM();
   });
   (d.incomes || []).forEach(inc => {
     if (inc.expected == null) {
@@ -266,24 +275,81 @@ const debtLeft = d => Math.max(0, d.amount - debtPaid(d));
 
 const invProfit = inv => inv.profits.reduce((s, p) => s + p.amount, 0);
 
-/* ---- Oylik to'lovlar va ularga bog'langan taqsimot qatorlari ---- */
-/* Bir oylik to'lovning shu oydagi "to'landi" yozuvi */
+/* ---- Oylik to'lovlar: qarzdorlik va taqsimot bilan bog'lanish ----
+   Har bir oylik to'lov `since` oyidan boshlab har oy uchun bitta majburiyat
+   tug'diradi. To'lanmagan oy keyingi oylarga qarzdorlik bo'lib o'tib boradi.
+   `paid` yozuvi: { ym — qaysi oy uchun, payYM/date — qachon to'langan, by }. */
+
+/* "2026-09" + 1 => "2026-10" */
+function ymAdd(ym, n) {
+  const [y, mo] = ym.split("-").map(Number);
+  const t = y * 12 + (mo - 1) + n;
+  return `${Math.floor(t / 12)}-${String(t % 12 + 1).padStart(2, "0")}`;
+}
+/* fromYM dan toYM gacha (ikkalasi ham kiradi) */
+function ymRange(fromYM, toYM) {
+  const out = [];
+  for (let c = fromYM, i = 0; c <= toYM && i < 600; c = ymAdd(c, 1), i++) out.push(c);
+  return out;
+}
+/* Bir oylik to'lovning shu oy uchun "to'landi" yozuvi */
 const monthEntry = (m, ym) => (m.paid || []).find(e => e.ym === ym);
-/* Shu oyda hali to'lanmagan oylik to'lovlar — sana bo'yicha */
-const monthlyUnpaid = ym => S.monthly.filter(m => !monthEntry(m, ym)).sort((a, b) => a.day - b.day);
-/* Taqsimot qatori oylik to'lovga bog'langan bo'lsa — o'sha to'lovni qaytaradi */
-const allocSrc = a => (a.srcId ? S.monthly.find(m => m.id === a.srcId) : null);
+/* Qaysi oylar uchun hali to'lanmagan (eng eskisi birinchi) */
+function monthlyDue(m, uptoYM = nowYM()) {
+  const start = m.since || uptoYM;
+  if (start > uptoYM) return [];
+  return ymRange(start, uptoYM).filter(ym => !monthEntry(m, ym));
+}
+/* Eng eski to'lanmagan oy — ✓ bosilganda shu oy yopiladi */
+const oldestDue = (m, uptoYM = nowYM()) => monthlyDue(m, uptoYM)[0] || null;
+/* O'tgan oylardan qolgan qarzdorlik (joriy oy kirmaydi) */
+const monthlyArrears = (m, uptoYM = nowYM()) => monthlyDue(m, uptoYM).filter(ym => ym < uptoYM);
+/* Barcha to'lovlarning to'lanmagan majburiyatlari: eski qarzlar birinchi.
+   Har bir to'lanmagan oy alohida satr bo'lib taqsimotga tushadi. */
+function dueObligations(uptoYM = nowYM()) {
+  const out = [];
+  S.monthly.forEach(m => monthlyDue(m, uptoYM).forEach(ym => out.push({ m, ym })));
+  return out.sort((a, b) => (a.ym === b.ym ? a.m.day - b.m.day : (a.ym < b.ym ? -1 : 1)));
+}
+/* Reja tuzayotganda qaysi oygacha qaraymiz: daromad sanasi o'tmishda bo'lsa ham
+   bugungi kunga qadar to'lanmay qolganlarning hammasi ko'rinishi kerak */
+const planUpto = date => { const y = ymOf(date), n = nowYM(); return y > n ? y : n; };
+/* Jami to'lanmagan summa */
+const dueTotal = (uptoYM = nowYM()) => dueObligations(uptoYM).reduce((s, o) => s + o.m.amount, 0);
+/* Shu oyda haqiqatda to'langan summa (o'tgan oylarning qarzi ham shu yerga kiradi) */
+const paidInMonth = payYM =>
+  S.monthly.reduce((s, m) => s + (m.paid || []).filter(e => (e.payYM || e.ym) === payYM).length * m.amount, 0);
+
+/* Taqsimot qatori qaysi oylik to'lovga tegishli.
+   srcId bo'lmasa — eski qatorlar uchun nomi bo'yicha moslashtiramiz. */
+function allocSrc(a) {
+  if (a.srcId) return S.monthly.find(m => m.id === a.srcId) || null;
+  const n = String(a.name || "").trim().toLowerCase();
+  if (!n) return null;
+  return S.monthly.find(m => m.name.trim().toLowerCase() === n) || null;
+}
+/* Qator qaysi oy uchun: bog'langanida yozilgan ym; eski qatorlarda —
+   hozircha to'lanmagan eng eski oy, hammasi to'langan bo'lsa oxirgi to'langan oy */
+function allocYM(a) {
+  if (a.ym) return a.ym;
+  const m = allocSrc(a);
+  if (!m) return nowYM();
+  return oldestDue(m) || (m.paid || []).map(e => e.ym).sort().pop() || nowYM();
+}
 /* Bog'langan qatorning holati oylik to'lovning o'zidan olinadi — shuning uchun
    qayerdan belgilansa ham (Jamlanma, Oylik to'lovlar, Daromad taqsimoti) bir xil */
 function allocDone(a) {
   const m = allocSrc(a);
-  return m ? !!monthEntry(m, a.ym || nowYM()) : !!a.done;
+  return m ? !!monthEntry(m, allocYM(a)) : !!a.done;
 }
-/* Rejada avval oylik to'lovlar (sana bo'yicha), keyin qo'shimcha qatorlar turadi */
+/* Rejada avval oylik to'lovlar (eski qarzlar, so'ng sana bo'yicha), keyin qolganlari */
 function allocsOrdered(inc) {
   const linked = [], rest = [];
   inc.allocs.forEach(a => (allocSrc(a) ? linked : rest).push(a));
-  linked.sort((x, y) => allocSrc(x).day - allocSrc(y).day);
+  linked.sort((x, y) => {
+    const xy = allocYM(x), yy = allocYM(y);
+    return xy === yy ? allocSrc(x).day - allocSrc(y).day : (xy < yy ? -1 : 1);
+  });
   return [...linked, ...rest];
 }
 
@@ -360,8 +426,12 @@ function personalTransactions() {
   }
   for (const m of S.monthly)
     for (const e of (m.paid || [])) {
+      /* xarajat haqiqatda to'langan sanaga yoziladi; eski yozuvlarda — o'sha oyning sanasiga */
       const day = String(Math.min(m.day, 28)).padStart(2, "0");
-      tx.push({ date: `${e.ym}-${day}`, type: "chiqim", cat: "Oylik to'lov", label: m.name + (e.by ? ` (${e.by} to'lagan)` : ""), amount: m.amount });
+      const date = e.date || `${e.payYM || e.ym}-${day}`;
+      const late = e.ym !== (e.payYM || e.ym);
+      tx.push({ date, type: "chiqim", cat: "Oylik to'lov",
+        label: m.name + (late ? ` (${fmtYM(e.ym)} uchun)` : "") + (e.by ? ` (${e.by} to'lagan)` : ""), amount: m.amount });
     }
   return tx.sort((a, b) => (a.date < b.date ? 1 : -1));
 }
@@ -576,18 +646,24 @@ function renderDashboard() {
     <div class="card">
       <div class="stat-label">Shu oy to'lovlari — ${MONTHS[now.getMonth()]}</div>
       ${upcoming.length ? upcoming.map(m => {
-        const entry = (m.paid || []).find(e => e.ym === ym);
+        const entry = monthEntry(m, ym);
+        const back = monthlyArrears(m, ym);
         const overdue = !entry && m.day < now.getDate();
+        const due = oldestDue(m, ym);
         return `<div class="month-row">
-          <div class="day-badge ${entry ? "" : overdue ? "overdue" : m.day <= now.getDate() + 3 ? "due" : ""}">
+          <div class="day-badge ${back.length ? "overdue" : entry ? "" : overdue ? "overdue" : m.day <= now.getDate() + 3 ? "due" : ""}">
             <span class="d">${m.day}</span><span class="m">sana</span>
           </div>
           <div style="flex:1;min-width:0">
-            <div style="font-weight:600">${esc(m.name)}</div>
-            <div style="font-size:.78rem;color:var(--text-3)">${entry ? (entry.by ? `✓ to'landi <span class="paid-by">(${esc(entry.by)} to'lagan)</span>` : "✓ to'landi") : overdue ? "muddati o'tdi!" : "kutilmoqda"}</div>
+            <div style="font-weight:600">${esc(m.name)}${back.length ? `<span class="chip chip-red src-chip">${back.length} oy qarz</span>` : ""}</div>
+            <div style="font-size:.78rem;color:${back.length ? "var(--red)" : "var(--text-3)"}">${
+              back.length ? `${back.map(fmtYM).join(", ")} uchun to'lanmagan`
+              : entry ? (entry.by ? `✓ to'landi <span class="paid-by">(${esc(entry.by)} to'lagan)</span>` : "✓ to'landi")
+              : overdue ? "muddati o'tdi!" : "kutilmoqda"}</div>
           </div>
           <div style="font-weight:700">${money(m.amount)}</div>
-          <button class="check ${entry ? "on" : ""}" onclick="toggleMonthPaid('${m.id}')" title="To'landi deb belgilash">✓</button>
+          <button class="check ${due ? "" : "on"}" onclick="toggleMonthPaid('${m.id}')"
+            title="${due ? `${fmtYM(due)} uchun to'landi deb belgilash` : "Oxirgi to'lov belgisini olib tashlash"}">✓</button>
         </div>`;
       }).join("") : `<div class="empty" style="padding:26px"><div>Oylik to'lovlar hali kiritilmagan</div></div>`}
     </div>
@@ -798,7 +874,9 @@ function renderMonthly() {
   const now = new Date();
   const ym = nowYM();
   const total = S.monthly.reduce((s, m) => s + m.amount, 0);
-  const paidThis = S.monthly.filter(m => (m.paid || []).some(e => e.ym === ym)).reduce((s, m) => s + m.amount, 0);
+  const paidThis = paidInMonth(ym);          /* shu oyda haqiqatda to'langani */
+  const owed = dueTotal(ym);                 /* to'lanmagani: joriy oy + eski qarzlar */
+  const arrears = owed - S.monthly.filter(m => !monthEntry(m, ym)).reduce((s, m) => s + m.amount, 0);
   const sorted = [...S.monthly].sort((a, b) => a.day - b.day);
 
   el.innerHTML = `
@@ -813,25 +891,33 @@ function renderMonthly() {
     </div>
   </div>
   <div class="grid grid-3" style="margin-bottom:24px">
-    <div class="card stat-tile"><div class="stat-label">Oylik majburiyat</div><div class="stat-value">${money(total)}</div></div>
-    <div class="card stat-tile" style="--tile-glow:rgba(47,212,138,.3)"><div class="stat-label">Shu oy to'landi</div><div class="stat-value pos">${money(paidThis)}</div></div>
-    <div class="card stat-tile" style="--tile-glow:rgba(255,193,77,.3)"><div class="stat-label">Shu oy qoldi</div><div class="stat-value ${total - paidThis > 0 ? "neg" : "pos"}">${money(total - paidThis)}</div></div>
+    <div class="card stat-tile"><div class="stat-label">Oylik majburiyat</div><div class="stat-value">${money(total)}</div>
+      <div class="stat-note">har oy, ${S.monthly.length} ta to'lov</div></div>
+    <div class="card stat-tile" style="--tile-glow:rgba(47,212,138,.3)"><div class="stat-label">Shu oy to'landi</div><div class="stat-value pos">${money(paidThis)}</div>
+      <div class="stat-note">${MONTHS[now.getMonth()]} oyida to'langani${arrears > 0 ? " (eski qarz ham shu yerda)" : ""}</div></div>
+    <div class="card stat-tile" style="--tile-glow:rgba(255,193,77,.3)"><div class="stat-label">To'lanmagan</div><div class="stat-value ${owed > 0 ? "neg" : "pos"}">${money(owed)}</div>
+      <div class="stat-note">${arrears > 0 ? `shundan ${fmt(arrears)} so'm — o'tgan oylardan qolgan qarz` : "eski oylardan qarz yo'q"}</div></div>
   </div>
   <div class="card">
     ${sorted.length ? sorted.map(m => {
-      const entry = (m.paid || []).find(e => e.ym === ym);
+      const entry = monthEntry(m, ym);
+      const back = monthlyArrears(m, ym);               /* o'tgan oylardan qolganlari */
       const overdue = !entry && m.day < now.getDate();
+      const due = oldestDue(m, ym);
       return `<div class="month-row">
-        <div class="day-badge ${entry ? "" : overdue ? "overdue" : ""}"><span class="d">${m.day}</span><span class="m">-sana</span></div>
+        <div class="day-badge ${back.length ? "overdue" : entry ? "" : overdue ? "overdue" : ""}"><span class="d">${m.day}</span><span class="m">-sana</span></div>
         <div style="flex:1;min-width:0">
-          <div style="font-weight:600">${esc(m.name)}</div>
-          <div style="font-size:.78rem;color:${overdue ? "var(--red)" : "var(--text-3)"}">
+          <div style="font-weight:600">${esc(m.name)}${back.length ? `<span class="chip chip-red src-chip">${back.length} oy qarz</span>` : ""}</div>
+          <div style="font-size:.78rem;color:${back.length || overdue ? "var(--red)" : "var(--text-3)"}">
             har oyning ${m.day}-sanasi
-            ${entry ? (entry.by ? ` · ✓ to'landi <span class="paid-by">(${esc(entry.by)} to'lagan)</span>` : " · ✓ bu oy to'langan") : overdue ? " · muddati o'tdi!" : ""}
+            ${entry ? (entry.by ? ` · ✓ ${fmtYM(ym)} uchun to'landi <span class="paid-by">(${esc(entry.by)} to'lagan)</span>` : ` · ✓ ${fmtYM(ym)} uchun to'langan`)
+              : overdue ? " · muddati o'tdi!" : ""}
+            ${back.length ? `<br>To'lanmagan: ${back.map(fmtYM).join(", ")} — jami ${fmt(back.length * m.amount)} so'm` : ""}
           </div>
         </div>
         <div style="font-weight:700">${money(m.amount)}</div>
-        <button class="check ${entry ? "on" : ""}" onclick="toggleMonthPaid('${m.id}')" title="Bu oy to'landi">✓</button>
+        <button class="check ${due ? "" : "on"}" onclick="toggleMonthPaid('${m.id}')"
+          title="${due ? `${fmtYM(due)} uchun to'landi deb belgilash` : "Oxirgi to'lov belgisini olib tashlash"}">✓</button>
         <button class="btn btn-sm btn-danger-ghost" onclick="delMonthly('${m.id}')">✕</button>
       </div>`;
     }).join("") : `<div class="empty"><div class="empty-ico">${ico("calendar")}</div>Oylik to'lovlar hali kiritilmagan.<br>Masalan: internet, kredit, ijara haqi...</div>`}
@@ -842,21 +928,26 @@ function pdfMonthly() {
   sectionPDF(`Oylik to'lovlar — ${fmtYM(ym)}`, `
     <div class="rep-tiles">
       <div class="rep-tile"><div class="l">Oylik majburiyat</div><div class="v">${fmt(S.monthly.reduce((s, m) => s + m.amount, 0))} so'm</div></div>
+      <div class="rep-tile"><div class="l">Shu oyda to'landi</div><div class="v">${fmt(paidInMonth(ym))} so'm</div></div>
+      <div class="rep-tile"><div class="l">To'lanmagan (qarz bilan)</div><div class="v">${fmt(dueTotal(ym))} so'm</div></div>
     </div>
     <table>
-      <tr><th>To'lov</th><th>Sana</th><th class="num">Summa</th><th>Shu oy holati</th></tr>
+      <tr><th>To'lov</th><th>Sana</th><th class="num">Summa</th><th>Shu oy holati</th><th>Qarzdorlik</th></tr>
       ${[...S.monthly].sort((a, b) => a.day - b.day).map(m => {
-        const e = (m.paid || []).find(x => x.ym === ym);
+        const e = monthEntry(m, ym);
+        const back = monthlyArrears(m, ym);
         return `<tr><td>${esc(m.name)}</td><td>har oyning ${m.day}-sanasi</td><td class="num">${fmt(m.amount)}</td>
-          <td>${e ? (e.by ? `To'landi (${esc(e.by)} to'lagan)` : "To'landi") : "To'lanmagan"}</td></tr>`;
-      }).join("") || `<tr><td colspan="4">Yozuvlar yo'q</td></tr>`}
+          <td>${e ? (e.by ? `To'landi (${esc(e.by)} to'lagan)` : "To'landi") : "To'lanmagan"}</td>
+          <td>${back.length ? `${back.map(fmtYM).join(", ")} — ${fmt(back.length * m.amount)} so'm` : "yo'q"}</td></tr>`;
+      }).join("") || `<tr><td colspan="5">Yozuvlar yo'q</td></tr>`}
     </table>
     <h2>To'lovlar tarixi</h2>
     <table>
-      <tr><th>Oy</th><th>To'lov</th><th class="num">Summa</th><th>Kim to'lagan</th></tr>
+      <tr><th>Qaysi oy uchun</th><th>Qachon to'langan</th><th>To'lov</th><th class="num">Summa</th><th>Kim to'lagan</th></tr>
       ${S.monthly.flatMap(m => (m.paid || []).map(e => ({ m, e }))).sort((a, b) => (a.e.ym < b.e.ym ? 1 : -1))
-        .map(({ m, e }) => `<tr><td>${fmtYM(e.ym)}</td><td>${esc(m.name)}</td><td class="num">${fmt(m.amount)}</td><td>${e.by ? esc(e.by) : "O'zim"}</td></tr>`).join("")
-        || `<tr><td colspan="4">Tarix bo'sh</td></tr>`}
+        .map(({ m, e }) => `<tr><td>${fmtYM(e.ym)}</td><td>${e.date ? fmtDate(e.date) : fmtYM(e.payYM || e.ym)}</td>
+          <td>${esc(m.name)}</td><td class="num">${fmt(m.amount)}</td><td>${e.by ? esc(e.by) : "O'zim"}</td></tr>`).join("")
+        || `<tr><td colspan="5">Tarix bo'sh</td></tr>`}
     </table>`);
 }
 function openAddMonthly() {
@@ -867,6 +958,9 @@ function openAddMonthly() {
     <div class="form-row"><label>Summa (so'm)</label>${moneyInput("f_mamount", "200,000")}</div>
     <div class="form-row"><label>Oyning qaysi sanasi</label><input id="f_mday" class="inp" type="number" min="1" max="31" placeholder="15"></div>
   </div>
+  <div class="form-row"><label>Qaysi oydan beri to'lanadi</label>
+    <input id="f_msince" class="inp" type="month" value="${nowYM()}">
+    <div class="hint">Shu oydan boshlab har oy hisoblanadi. To'lanmay qolgan oylar qarzdorlik bo'lib keyingi oyga o'tadi.</div></div>
   <div class="modal-actions">
     <button class="btn btn-ghost" onclick="closeModal()">Bekor</button>
     <button class="btn btn-primary" onclick="saveMonthly()">Saqlash</button>
@@ -878,24 +972,39 @@ function saveMonthly() {
   const amount = mval("f_mamount");
   const day = parseInt(document.getElementById("f_mday").value);
   if (!name || !(amount > 0) || !(day >= 1 && day <= 31)) return alert("Barcha maydonlarni to'g'ri to'ldiring");
-  S.monthly.push({ id: uid(), name, amount, day, paid: [] });
+  const since = document.getElementById("f_msince")?.value || nowYM();
+  S.monthly.push({ id: uid(), name, amount, day, since, paid: [] });
   closeModal(); renderAll();
 }
 /* Belgi shu to'lovning o'zida saqlanadi — Jamlanma, Oylik to'lovlar va
    Daromad taqsimoti shu bitta yozuvga qaraydi, ya'ni holat hamma joyda bir xil */
 function toggleMonthPaid(id, ym) {
   const m = S.monthly.find(x => x.id === id); if (!m) return;
-  ym = ym || nowYM();
   m.paid = m.paid || [];
+  /* ym berilmasa — eng eski to'lanmagan oyni yopamiz */
+  ym = ym || oldestDue(m);
+  if (!ym) {
+    /* hammasi to'langan: belgini olib tashlaymiz (oxirgi to'langan oydan) */
+    const last = [...m.paid].sort((a, b) => (a.ym < b.ym ? -1 : 1)).pop();
+    if (last) m.paid.splice(m.paid.indexOf(last), 1);
+    renderAll(); return;
+  }
   const i = m.paid.findIndex(e => e.ym === ym);
   if (i >= 0) { m.paid.splice(i, 1); renderAll(); return; }
+  const late = ym < nowYM();
   /* kim to'laganini so'raymiz */
   openModal(`
   <h3>${esc(m.name)} — kim to'ladi?</h3>
-  <p style="color:var(--text-2);font-size:.88rem;margin-bottom:14px">${fmtYM(ym)} uchun to'lov. Agar sizning o'rningizga boshqa inson to'lagan bo'lsa, ismini yozing.</p>
-  <div class="form-row"><label>To'lagan inson</label>
-    <input id="f_paidby" class="inp" placeholder="O'zim" value=""></div>
-  <div class="hint">Belgilagach, bu to'lov Oylik to'lovlar, Jamlanma va Daromad taqsimotida birdek "to'langan" bo'lib ko'rinadi.</div>
+  <p style="color:var(--text-2);font-size:.88rem;margin-bottom:14px">
+    <b>${fmtYM(ym)}</b> uchun to'lov${late ? ` <span style="color:var(--yellow)">(o'tgan oydan qolgan qarz)</span>` : ""}.
+    Agar sizning o'rningizga boshqa inson to'lagan bo'lsa, ismini yozing.</p>
+  <div class="form-2">
+    <div class="form-row"><label>To'lagan inson</label>
+      <input id="f_paidby" class="inp" placeholder="O'zim" value=""></div>
+    <div class="form-row"><label>Qachon to'landi</label>
+      <input id="f_paiddate" class="inp" type="date" value="${todayISO()}"></div>
+  </div>
+  <div class="hint">To'lov siz ko'rsatgan sana tushgan oyning hisobiga yoziladi. Belgilagach, bu to'lov Oylik to'lovlar, Jamlanma va Daromad taqsimotida birdek "to'langan" bo'lib ko'rinadi.</div>
   <div class="modal-actions">
     <button class="btn btn-ghost" onclick="closeModal()">Bekor</button>
     <button class="btn btn-green" onclick="saveMonthPaid('${id}','self','${ym}')">${ico("check")} O'zim to'ladim</button>
@@ -910,8 +1019,10 @@ function saveMonthPaid(id, mode, ym) {
     by = document.getElementById("f_paidby").value.trim();
     if (by.toLowerCase() === "o'zim" || by.toLowerCase() === "ozim") by = "";
   }
+  const date = document.getElementById("f_paiddate")?.value || todayISO();
   m.paid = m.paid || [];
-  m.paid.push({ ym: ym || nowYM(), by });
+  /* ym — qaysi oy uchun; payYM — haqiqatda qaysi oyda to'langani */
+  m.paid.push({ ym: ym || nowYM(), by, date, payYM: ymOf(date) });
   closeModal(); renderAll();
 }
 function delMonthly(id) {
@@ -983,7 +1094,11 @@ function renderIncome() {
           return `
         <div class="person-row">
           <button class="check ${done ? "on" : ""}" onclick="toggleAllocDone('${inc.id}','${a.id}')" title="${done ? "Bajarilmagan deb belgilash" : "Bajarildi deb belgilash"}">✓</button>
-          <div class="p-name ${done ? "paid-name" : ""}" style="flex:1">${esc(a.name)}${src ? `<span class="chip chip-blue src-chip" title="Oylik to'lovlar bilan bog'langan — holati ikkala bo'limda bir xil">${ico("calendar")} ${src.day}-sana</span>` : ""}</div>
+          <div class="p-name ${done ? "paid-name" : ""}" style="flex:1">${esc(a.name)}${src ? (() => {
+            const aym = allocYM(a);
+            const late = !done && aym < nowYM();
+            return `<span class="chip ${late ? "chip-red" : "chip-blue"} src-chip" title="Oylik to'lovlar bilan bog'langan (${fmtYM(aym)} uchun) — holati ikkala bo'limda bir xil">${ico("calendar")} ${late ? fmtYM(aym) + " qarzi" : src.day + "-sana"}</span>`;
+          })() : ""}</div>
           <div class="p-due"><div class="rounded-sum">${fmt(a.amount)} <span style="font-size:.7em;color:var(--text-3)">so'm</span></div></div>
           <button class="dyn-del" style="width:30px;height:30px;font-size:.72rem;background:rgba(91,140,255,.13);color:var(--accent)" onclick="openAllocModal('${inc.id}','${a.id}')" title="O'zgartirish">${ico("pencil")}</button>
           <button class="dyn-del" style="width:30px;height:30px;font-size:.72rem" onclick="delAlloc('${inc.id}','${a.id}')" title="O'chirish">✕</button>
@@ -1057,23 +1172,29 @@ function openAddIncome() {
 function renderMonthlyPick() {
   const wrap = document.getElementById("monthlyPickWrap");
   if (!wrap) return;
-  const ym = ymOf(document.getElementById("f_idate")?.value);
-  const list = monthlyUnpaid(ym);
+  const ym = planUpto(document.getElementById("f_idate")?.value);
+  /* joriy oy + o'tgan oylardan qolgan qarzlar, har biri alohida satr */
+  const list = dueObligations(ym);
+  const arrears = list.filter(o => o.ym < ym).reduce((s, o) => s + o.m.amount, 0);
   /* sana o'zgarganda foydalanuvchi olib tashlagan belgilarni eslab qolamiz */
   const prev = {};
-  wrap.querySelectorAll(".pick-chk").forEach(c => { prev[c.dataset.id] = c.checked; });
-  wrap.innerHTML = `<label>Oylik to'lovlar — ${fmtYM(ym)} uchun to'lanmaganlari</label>` +
+  wrap.querySelectorAll(".pick-chk").forEach(c => { prev[c.dataset.key] = c.checked; });
+  wrap.innerHTML = `<label>Oylik to'lovlar — ${fmtYM(ym)} holatiga ko'ra to'lanmaganlari</label>` +
     (list.length ? `
-    <div class="pick-list">${list.map(m => `
+    <div class="pick-list">${list.map(({ m, ym: oym }) => {
+      const key = m.id + "|" + oym;
+      const late = oym < ym;
+      return `
       <label class="pick-row">
-        <input type="checkbox" class="pick-chk" data-id="${m.id}" data-amount="${m.amount}" ${prev[m.id] === false ? "" : "checked"} oninput="incomeLive()">
-        <span class="chip chip-gray">${m.day}-sana</span>
-        <span class="p-name">${esc(m.name)}</span>
+        <input type="checkbox" class="pick-chk" data-key="${key}" data-id="${m.id}" data-ym="${oym}" data-amount="${m.amount}" ${prev[key] === false ? "" : "checked"} oninput="incomeLive()">
+        <span class="chip ${late ? "chip-red" : "chip-gray"}">${late ? fmtYM(oym) : m.day + "-sana"}</span>
+        <span class="p-name">${esc(m.name)}${late ? ` <span style="color:var(--red);font-size:.78rem">· eski qarz</span>` : ""}</span>
         <span class="p-due"><span class="rounded-sum">${fmt(m.amount)}</span></span>
-      </label>`).join("")}</div>
-    <div class="hint">Belgilanganlari reja boshiga tushadi. Keyin to'landi deb belgilasangiz — Oylik to'lovlar bo'limida ham to'langan bo'lib ko'rinadi.</div>`
+      </label>`;
+    }).join("")}</div>
+    <div class="hint">${arrears > 0 ? `O'tgan oylardan <b style="color:var(--red)">${fmt(arrears)} so'm</b> qarz qolgan — u ham ro'yxatga qo'shildi. ` : ""}Belgilanganlari reja boshiga tushadi. Keyin to'landi deb belgilasangiz — Oylik to'lovlar bo'limida ham to'langan bo'lib ko'rinadi.</div>`
     : `<div class="hint">${S.monthly.length
-        ? `${fmtYM(ym)} uchun to'lanmagan oylik to'lov yo'q — hammasi to'langan.`
+        ? `${fmtYM(ym)} holatiga ko'ra to'lanmagan oylik to'lov yo'q — hammasi to'langan.`
         : `Oylik to'lovlar bo'limi hali bo'sh. U yerga to'lovlarni kiritsangiz, bu yerda avtomatik chiqadi.`}</div>`);
   incomeLive();
 }
@@ -1103,11 +1224,12 @@ function saveIncome() {
   const date = document.getElementById("f_idate").value || todayISO();
   const ym = ymOf(date);
   const allocs = [];
-  /* avval belgilangan oylik to'lovlar — reja boshida turadi va o'sha to'lovga bog'lanadi */
+  /* avval belgilangan oylik to'lovlar — reja boshida turadi va o'sha to'lovning
+     aynan shu oyiga bog'lanadi (eski qarz bo'lsa — o'sha eski oyga) */
   document.querySelectorAll(".pick-chk").forEach(c => {
     if (!c.checked) return;
     const m = S.monthly.find(x => x.id === c.dataset.id);
-    if (m) allocs.push({ id: uid(), name: m.name, amount: m.amount, done: false, srcId: m.id, ym });
+    if (m) allocs.push({ id: uid(), name: m.name, amount: m.amount, done: false, srcId: m.id, ym: c.dataset.ym || ym });
   });
   document.querySelectorAll("#allocRows .dyn-row").forEach(r => {
     const n = r.querySelector(".alloc-name").value.trim();
@@ -1165,7 +1287,7 @@ function toggleAllocDone(incId, allocId) {
   const src = allocSrc(a);
   /* oylik to'lovga bog'langan qator — belgi o'sha to'lovning o'ziga yoziladi,
      shunda Oylik to'lovlar va Jamlanmada ham to'langan bo'lib ko'rinadi */
-  if (src) return toggleMonthPaid(src.id, a.ym || nowYM());
+  if (src) return toggleMonthPaid(src.id, allocYM(a));
   a.done = !a.done;
   renderAll();
 }
@@ -1179,21 +1301,24 @@ function openAllocModal(incId, allocId) {
   /* Yangi qator uchun bo'sh joy: o'zgartirishda shu qatorning o'zi hisobga olinmaydi */
   const free = inc.expected - used + (a ? a.amount : 0);
   /* Yangi qator qo'shayotganda — shu oyning hali rejaga kirmagan to'lanmagan oylik to'lovlari */
-  const incYM = ymOf(inc.date);
-  const linkedIds = new Set(inc.allocs.filter(x => x.srcId).map(x => x.srcId));
-  const pick = a ? [] : monthlyUnpaid(incYM).filter(m => !linkedIds.has(m.id));
+  const incYM = planUpto(inc.date);
+  const linkedKeys = new Set(inc.allocs.filter(x => x.srcId).map(x => x.srcId + "|" + (x.ym || incYM)));
+  const pick = a ? [] : dueObligations(incYM).filter(o => !linkedKeys.has(o.m.id + "|" + o.ym));
   openModal(`
   <h3>${a ? "Rejani o'zgartirish" : "Rejaga qo'shish"}</h3>
   <p style="color:var(--text-2);font-size:.88rem;margin-bottom:14px">${esc(inc.name)} · taqsimlanmagan summa: <b style="color:${free >= 0 ? "var(--green)" : "var(--red)"}">${fmt(free)} so'm</b></p>
   ${pick.length ? `<div class="form-row" id="allocPick">
-    <label>Oylik to'lovlardan qo'shish — ${fmtYM(incYM)} uchun to'lanmaganlari</label>
-    <div class="pick-list">${pick.map(m => `
+    <label>Oylik to'lovlardan qo'shish — ${fmtYM(incYM)} holatiga ko'ra to'lanmaganlari</label>
+    <div class="pick-list">${pick.map(({ m, ym: oym }) => {
+      const late = oym < incYM;
+      return `
       <label class="pick-row">
-        <input type="checkbox" class="pick-chk" data-id="${m.id}" checked>
-        <span class="chip chip-gray">${m.day}-sana</span>
-        <span class="p-name">${esc(m.name)}</span>
+        <input type="checkbox" class="pick-chk" data-id="${m.id}" data-ym="${oym}" checked>
+        <span class="chip ${late ? "chip-red" : "chip-gray"}">${late ? fmtYM(oym) : m.day + "-sana"}</span>
+        <span class="p-name">${esc(m.name)}${late ? ` <span style="color:var(--red);font-size:.78rem">· eski qarz</span>` : ""}</span>
         <span class="p-due"><span class="rounded-sum">${fmt(m.amount)}</span></span>
-      </label>`).join("")}</div>
+      </label>`;
+    }).join("")}</div>
     <button class="btn btn-sm btn-green" style="margin-top:10px" onclick="addPickedMonthly('${incId}')">${ico("plus")} Tanlanganlarni rejaga qo'shish</button>
     <div class="hint">Yoki quyida o'zingiz xohlagan qatorni yozing.</div>
   </div>` : ""}
@@ -1217,12 +1342,13 @@ function openAllocModal(incId, allocId) {
 /* Tanlangan oylik to'lovlarni mavjud daromad rejasiga qo'shish */
 function addPickedMonthly(incId) {
   const inc = S.incomes.find(x => x.id === incId); if (!inc) return;
-  const ym = ymOf(inc.date);
+  const incYM = planUpto(inc.date);
   let added = 0;
   document.querySelectorAll("#allocPick .pick-chk").forEach(c => {
     if (!c.checked) return;
     const m = S.monthly.find(x => x.id === c.dataset.id);
-    if (!m || inc.allocs.some(x => x.srcId === m.id)) return;
+    const ym = c.dataset.ym || incYM;
+    if (!m || inc.allocs.some(x => x.srcId === m.id && (x.ym || incYM) === ym)) return;
     inc.allocs.push({ id: uid(), name: m.name, amount: m.amount, done: false, srcId: m.id, ym });
     added++;
   });
@@ -1249,10 +1375,10 @@ function saveAlloc(incId, allocId) {
     const chk = document.getElementById("f_adone");
     if (chk && src) {
       /* belgini oylik to'lovning o'ziga yozamiz — holat hamma bo'limda bir xil bo'lsin */
-      const ym = a.ym || nowYM();
+      const ym = allocYM(a);
       src.paid = src.paid || [];
       const i = src.paid.findIndex(e => e.ym === ym);
-      if (chk.checked && i < 0) src.paid.push({ ym, by: "" });
+      if (chk.checked && i < 0) src.paid.push({ ym, by: "", date: todayISO(), payYM: nowYM() });
       else if (!chk.checked && i >= 0) src.paid.splice(i, 1);
     } else if (chk) a.done = chk.checked;
   } else {
